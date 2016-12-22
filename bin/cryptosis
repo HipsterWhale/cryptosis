@@ -1,0 +1,53 @@
+#!/usr/bin/env ruby
+
+require 'uri'
+require 'net/http'
+require 'json'
+require 'sqlite3'
+require 'date'
+
+# Creating cache sqlite3 cache database
+CACHE_DB = SQLite3::Database.new "#{ENV['HOME']}/.cryptosis_cache.db"
+rows = CACHE_DB.execute <<-SQL
+  CREATE TABLE IF NOT EXISTS cryptosis (
+    name VARCHAR(16),
+    last_update INT,
+    json TEXT
+  );
+SQL
+
+# Ask API method helper
+def askapi(market)
+  resp = Net::HTTP.get(URI.parse("https://api.cryptonator.com/api/ticker/#{market}"))
+  CACHE_DB.execute("DELETE FROM cryptosis WHERE name = ?", market)
+  CACHE_DB.execute("INSERT INTO cryptosis (name, last_update, json) VALUES (?,?,?)",
+                    market, DateTime.now.to_time.to_i, resp)
+  post_treatment(JSON.parse(resp))
+end
+
+# Treatment after API answered
+def post_treatment(resp)
+  exit 10 if resp['success'] != true
+  exit 14 unless resp['ticker'].has_key? ARGV[1]
+  puts resp['ticker'][ARGV[1]]
+end
+
+# Check if first arg exists
+exit 12 unless (market = ARGV[0]) != nil
+
+# Calling API or loading cache file if within 5 minutes window
+cache_search = CACHE_DB.execute("SELECT * FROM cryptosis WHERE name = ?", market)
+
+if cache_search.count == 0
+  # There is no cache, creating it...
+  askapi(market)
+else
+  cache = cache_search.first
+  if DateTime.now.to_time.to_i - cache[1] > 300
+    # Cache is outdated, renew it
+    askapi(market)
+  else
+    # Cache is good, using it
+    post_treatment(JSON.parse(cache[2]))
+  end
+end
